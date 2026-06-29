@@ -214,6 +214,11 @@ app.post("/api/createmember", async (req, res) => {
 
   }
 });
+app.get("/api/getmess", async (req, res) => {
+  res.send("Hello Worldjhhgjh!");
+
+
+})
 
 
 
