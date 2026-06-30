@@ -62,6 +62,18 @@ async function run() {
             message: "Required fields missing",
           });
         }
+        const userId = createdBy;
+
+        const alreadyMember = await allmembers.findOne({
+          userId,
+        });
+
+        if (alreadyMember) {
+          return res.status(409).send({
+            success: false,
+            message: "You are already a member of a mess.",
+          });
+        }
 
         // Generate unique invite code
         let inviteCode;
@@ -254,7 +266,6 @@ async function run() {
 
         const alreadyMember = await allmembers.findOne({
           userId,
-          
         });
 
         if (alreadyMember) {
@@ -409,7 +420,7 @@ async function run() {
     });
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
