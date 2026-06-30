@@ -36,6 +36,7 @@ async function run() {
     const allmesses = db.collection("allmesses");
     const allmembers = db.collection("allmembers");
     const joinRequestsCollection = db.collection("joinRequests");
+    const Meals = db.collection('mealscollection')
 
     // Generate random invite code
     function generateInviteCode() {
@@ -53,7 +54,7 @@ async function run() {
     // Create a new mess
     app.post("/api/createmess", async (req, res) => {
       try {
-        const { messName, messImage, messLocation, createdBy } = req.body;
+        const { messName, messImage, messLocation, createdBy ,creaotrName } = req.body;
 
         // Validate request data
         if (!messName || !messImage || !messLocation || !createdBy) {
@@ -98,8 +99,17 @@ async function run() {
           messLocation,
 
           inviteCode,
+          creaotrName,
 
           createdBy,
+          mealSettings: {
+            breakfastWeight: 0.5,
+            lunchWeight: 1,
+            dinnerWeight: 1,
+            breakfastDeadline: "07:00", // Format: HH:mm
+            lunchDeadline: "12:00",
+            dinnerDeadline: "20:00",
+          },
 
           createdAt: new Date(),
         };
@@ -198,7 +208,7 @@ async function run() {
         res.status(404).send({ role: null });
       }
     });
-    // get user messId
+    // get  messId
     app.get("/api/member/messid/:userId", async (req, res) => {
       const { userId } = req.params;
       const member = await allmembers.findOne({ userId: userId });
@@ -392,7 +402,7 @@ async function run() {
               .send({ success: false, message: "User is already a member!" });
           }
 
-          // মেম্বার হিসেবে অ্যাড করা
+          // add as a member
           const newMember = {
             name: userData.userName,
             email: userData.userEmail,
@@ -411,13 +421,111 @@ async function run() {
           });
         }
 
-        // যদি অ্যাকশন 'reject' হয়
+        // if action is reject
         res.send({ success: true, message: "Request rejected successfully." });
       } catch (error) {
         console.error("Error handling request:", error);
         res.status(500).send({ success: false, message: "Server Error" });
       }
     });
+
+
+
+    // meal settings
+
+   app.patch("/api/meal/update", async (req, res) => {
+  try {
+    const { userId, messId, date, mealType, status } = req.body;
+
+    // ১. চেক করা: ইউজার ওই মেসের সদস্য কি না (Security Check)
+    const isMember = await allmembers.findOne({ userId, messId: new ObjectId(messId) });
+    if (!isMember) {
+      return res.status(403).send({ success: false, message: "Unauthorized: You are not a member of this mess!" });
+    }
+
+    // ২. মেসের ডেডলাইন সেটিংস নিয়ে আসা
+    const mess = await allmesses.findOne({ _id: new ObjectId(messId) });
+    if (!mess) return res.status(404).send({ success: false, message: "Mess not found!" });
+    
+    const deadline = mess.mealSettings[`${mealType}Deadline`];
+
+    // ৩. বর্তমান সময়ের সাথে ডেডলাইন চেক
+    const now = new Date();
+    const mealDate = new Date(date);
+    
+    // ডেট নরমাল করা (ঘণ্টা-মিনিট বাদ দিয়ে শুধু তারিখ)
+    mealDate.setUTCHours(0,0,0,0);
+    const today = new Date();
+    today.setUTCHours(0,0,0,0);
+
+    if (mealDate.getTime() === today.getTime()) {
+      const [hours, minutes] = deadline.split(':');
+      const deadLineDate = new Date();
+      deadLineDate.setHours(hours, minutes, 0, 0);
+      if (now > deadLineDate) {
+        return res.status(403).send({ success: false, message: "Deadline passed!" });
+      }
+    } else if (mealDate < today) {
+      return res.status(403).send({ success: false, message: "Cannot edit past meals!" });
+    }
+
+    // ৪. Meal আপডেট করা
+    const updateField = { [mealType]: status };
+    await Meals.updateOne(
+      { userId, date: mealDate },
+      { $set: updateField },
+      { upsert: true }
+    );
+
+    res.send({ success: true, message: "Meal updated successfully" });
+  } catch (error) {
+    console.error("Update Error:", error);
+    res.status(500).send({ success: false, message: "Failed to update" });
+  }
+});
+
+
+
+
+app.get("/api/meal/report", async (req, res) => {
+  try {
+    const { userId, month, year } = req.query; 
+
+    // মাস এবং বছর অনুযায়ী ডেট রেঞ্জ তৈরি
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0);
+
+    // .toArray() যোগ করা হয়েছে
+    const meals = await Meals.find({
+      userId,
+      date: { $gte: startDate, $lte: endDate }
+    }).toArray(); 
+
+    const total = meals.reduce((acc, curr) => {
+      if (curr.breakfast) acc.breakfast += 1;
+      if (curr.lunch) acc.lunch += 1;
+      if (curr.dinner) acc.dinner += 1;
+      return acc;
+    }, { breakfast: 0, lunch: 0, dinner: 0 });
+
+    res.send({ meals, total });
+  } catch (error) {
+    res.status(500).send({ success: false, message: "Server Error" });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
