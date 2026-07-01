@@ -91,7 +91,7 @@ async function run() {
           alreadyExists = !!found;
         }
 
-        // Prepare mess data
+        // Prepare mess data creat manager
         const newMess = {
           messName,
 
@@ -177,7 +177,7 @@ async function run() {
 
           userId,
 
-          messId: messId || null,
+           messId: new ObjectId(messId),
 
           createdAt: new Date(),
         };
@@ -445,11 +445,12 @@ async function run() {
       try {
         const { userId, messId, date, mealType, status } = req.body;
 
-        // ১. চেক করা: ইউজার ওই মেসের সদস্য কি না (Security Check)
+       
         const isMember = await allmembers.findOne({
           userId,
           messId: new ObjectId(messId),
         });
+     
         if (!isMember) {
           return res
             .status(403)
@@ -507,6 +508,8 @@ async function run() {
       }
     });
 
+
+    // make monthly report
     app.get("/api/meal/report", async (req, res) => {
       try {
         const { userId, month, year } = req.query;
@@ -536,6 +539,99 @@ async function run() {
         res.status(500).send({ success: false, message: "Server Error" });
       }
     });
+
+
+
+
+    // manager meal management
+    app.patch("/api/manager/update-meal", async (req, res) => {
+  try {
+    const { managerId, userId, date, breakfast, lunch, dinner, guestBreakfast, guestLunch, guestDinner } = req.body;
+
+    // ১. ম্যানেজার ভেরিফিকেশন
+    const manager = await allmembers.findOne({ userId: managerId, role: "manager" });
+    if (!manager) {
+      return res.status(403).send({ success: false, message: "Unauthorized: Only managers can update" });
+    }
+
+    // ২. মিল আপডেট (ম্যানেজার শুধু তার মেসের মেম্বারদের আপডেট করতে পারবে)
+    const targetMember = await allmembers.findOne({ userId: userId, messId: manager.messId });
+    if (!targetMember) {
+      return res.status(403).send({ success: false, message: "Cannot edit member outside your mess" });
+    }
+
+    const mealDate = new Date(date);
+    mealDate.setUTCHours(0, 0, 0, 0);
+
+    await Meals.updateOne(
+      { userId, date: mealDate },
+      { 
+        $set: { 
+          breakfast, lunch, dinner,
+          guestBreakfast: guestBreakfast || 0,
+          guestLunch: guestLunch || 0,
+          guestDinner: guestDinner || 0
+        } 
+      },
+      { upsert: true }
+    );
+
+    res.send({ success: true, message: "Update Successful" });
+  } catch (error) {
+    res.status(500).send({ success: false, message: "Update Failed" });
+  }
+});
+
+
+app.get("/api/manager/meals", async (req, res) => {
+  try {
+    const { userId, date } = req.query; 
+    
+    // ১. ইউজারটি ম্যানেজার কি না চেক করো
+    const manager = await allmembers.findOne({ userId: userId, role: "manager" });
+    if (!manager) {
+      return res.status(403).send({ success: false, message: "Unauthorized" });
+    }
+
+    // ২. মেসের সবার ডাটা আনো (ম্যানেজার + সব বর্ডার)
+    // কারণ ম্যানেজার নিজেও ওই messId এর একজন সদস্য
+    const members = await allmembers.find({ messId: manager.messId }).toArray();
+    
+    const mealDate = new Date(date);
+    mealDate.setUTCHours(0, 0, 0, 0);
+    const mealRecords = await Meals.find({ date: mealDate }).toArray();
+
+    // ৩. মার্জিং (যদি কারও রেকর্ড না থাকে, ডিফল্ট true)
+    const result = members.map(member => {
+      const record = mealRecords.find(m => m.userId === member.userId) || {};
+      return {
+        userId: member.userId,
+        name: member.name, // ম্যানেজারের নামও এখান থেকে আসবে
+        breakfast: record.breakfast !== false, 
+        lunch: record.lunch !== false,
+        dinner: record.dinner !== false,
+        guestBreakfast: record.guestBreakfast || 0,
+        guestLunch: record.guestLunch || 0,
+        guestDinner: record.guestDinner || 0
+      };
+    });
+
+    // ৪. সামারি (সবাইকে মিলিয়ে)
+    const summary = result.reduce((acc, curr) => {
+      if (curr.breakfast) acc.breakfast += 1;
+      if (curr.lunch) acc.lunch += 1;
+      if (curr.dinner) acc.dinner += 1;
+      acc.guestMeal += (curr.guestBreakfast + curr.guestLunch + curr.guestDinner);
+      return acc;
+    }, { breakfast: 0, lunch: 0, dinner: 0, guestMeal: 0 });
+
+    res.send({ success: true, summary, members: result });
+  } catch (error) {
+    res.status(500).send({ success: false, message: "Server Error" });
+  }
+});
+
+
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
