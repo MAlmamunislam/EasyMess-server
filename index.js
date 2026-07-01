@@ -612,7 +612,8 @@ app.get("/api/manager/meals", async (req, res) => {
         dinner: record.dinner !== false,
         guestBreakfast: record.guestBreakfast || 0,
         guestLunch: record.guestLunch || 0,
-        guestDinner: record.guestDinner || 0
+        guestDinner: record.guestDinner || 0,
+        createdAt: member.createdAt,
       };
     });
 
