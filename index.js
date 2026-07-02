@@ -37,6 +37,7 @@ async function run() {
     const allmembers = db.collection("allmembers");
     const joinRequestsCollection = db.collection("joinRequests");
     const Meals = db.collection("mealscollection");
+    const Deposits = db.collection("deposits");
 
     // Generate random invite code
     function generateInviteCode() {
@@ -177,7 +178,7 @@ async function run() {
 
           userId,
 
-           messId: new ObjectId(messId),
+          messId: new ObjectId(messId),
 
           createdAt: new Date(),
         };
@@ -216,7 +217,6 @@ async function run() {
         const member = await allmembers.findOne({ userId: userId });
 
         if (member) {
-          
           res.send({
             messId: member.messId,
             createdAt: member.createdAt,
@@ -445,19 +445,16 @@ async function run() {
       try {
         const { userId, messId, date, mealType, status } = req.body;
 
-       
         const isMember = await allmembers.findOne({
           userId,
           messId: new ObjectId(messId),
         });
-     
+
         if (!isMember) {
-          return res
-            .status(403)
-            .send({
-              success: false,
-              message: "Unauthorized: You are not a member of this mess!",
-            });
+          return res.status(403).send({
+            success: false,
+            message: "Unauthorized: You are not a member of this mess!",
+          });
         }
 
         // ২. মেসের ডেডলাইন সেটিংস নিয়ে আসা
@@ -508,7 +505,6 @@ async function run() {
       }
     });
 
-
     // make monthly report
     app.get("/api/meal/report", async (req, res) => {
       try {
@@ -517,7 +513,6 @@ async function run() {
         const startDate = new Date(year, month - 1, 1);
         const endDate = new Date(year, month, 0);
 
-        
         const meals = await Meals.find({
           userId,
           date: { $gte: startDate, $lte: endDate },
@@ -539,97 +534,427 @@ async function run() {
       }
     });
 
-
-
-
     // manager meal management
     app.patch("/api/manager/update-meal", async (req, res) => {
-  try {
-    const { managerId, userId, date, breakfast, lunch, dinner, guestBreakfast, guestLunch, guestDinner } = req.body;
+      try {
+        const {
+          managerId,
+          userId,
+          date,
+          breakfast,
+          lunch,
+          dinner,
+          guestBreakfast,
+          guestLunch,
+          guestDinner,
+        } = req.body;
 
-    // ১. ম্যানেজার ভেরিফিকেশন
-    const manager = await allmembers.findOne({ userId: managerId, role: "manager" });
-    if (!manager) {
-      return res.status(403).send({ success: false, message: "Unauthorized: Only managers can update" });
-    }
+        // ১. ম্যানেজার ভেরিফিকেশন
+        const manager = await allmembers.findOne({
+          userId: managerId,
+          role: "manager",
+        });
+        if (!manager) {
+          return res
+            .status(403)
+            .send({
+              success: false,
+              message: "Unauthorized: Only managers can update",
+            });
+        }
 
-    // ২. মিল আপডেট (ম্যানেজার শুধু তার মেসের মেম্বারদের আপডেট করতে পারবে)
-    const targetMember = await allmembers.findOne({ userId: userId, messId: manager.messId });
-    if (!targetMember) {
-      return res.status(403).send({ success: false, message: "Cannot edit member outside your mess" });
-    }
+        // ২. মিল আপডেট (ম্যানেজার শুধু তার মেসের মেম্বারদের আপডেট করতে পারবে)
+        const targetMember = await allmembers.findOne({
+          userId: userId,
+          messId: manager.messId,
+        });
+        if (!targetMember) {
+          return res
+            .status(403)
+            .send({
+              success: false,
+              message: "Cannot edit member outside your mess",
+            });
+        }
 
-    const mealDate = new Date(date);
-    mealDate.setUTCHours(0, 0, 0, 0);
+        const mealDate = new Date(date);
+        mealDate.setUTCHours(0, 0, 0, 0);
 
-    await Meals.updateOne(
-      { userId, date: mealDate },
-      { 
-        $set: { 
-          breakfast, lunch, dinner,
-          guestBreakfast: guestBreakfast || 0,
-          guestLunch: guestLunch || 0,
-          guestDinner: guestDinner || 0
-        } 
-      },
-      { upsert: true }
-    );
+        await Meals.updateOne(
+          { userId, date: mealDate },
+          {
+            $set: {
+              breakfast,
+              lunch,
+              dinner,
+              guestBreakfast: guestBreakfast || 0,
+              guestLunch: guestLunch || 0,
+              guestDinner: guestDinner || 0,
+            },
+          },
+          { upsert: true },
+        );
 
-    res.send({ success: true, message: "Update Successful" });
-  } catch (error) {
-    res.status(500).send({ success: false, message: "Update Failed" });
-  }
-});
-
-
-app.get("/api/manager/meals", async (req, res) => {
-  try {
-    const { userId, date } = req.query; 
-    
-    // ১. ইউজারটি ম্যানেজার কি না চেক করো
-    const manager = await allmembers.findOne({ userId: userId, role: "manager" });
-    if (!manager) {
-      return res.status(403).send({ success: false, message: "Unauthorized" });
-    }
-
-    const members = await allmembers.find({ messId: manager.messId }).toArray();
-    
-    const mealDate = new Date(date);
-    mealDate.setUTCHours(0, 0, 0, 0);
-    const mealRecords = await Meals.find({ date: mealDate }).toArray();
-
-    // ৩. if thare have no meal record for a member, we will assume they didn't take any meal
-    const result = members.map(member => {
-      const record = mealRecords.find(m => m.userId === member.userId) || {};
-      return {
-        userId: member.userId,
-        name: member.name, 
-        breakfast: record.breakfast !== false, 
-        lunch: record.lunch !== false,
-        dinner: record.dinner !== false,
-        guestBreakfast: record.guestBreakfast || 0,
-        guestLunch: record.guestLunch || 0,
-        guestDinner: record.guestDinner || 0,
-        createdAt: member.createdAt,
-      };
+        res.send({ success: true, message: "Update Successful" });
+      } catch (error) {
+        res.status(500).send({ success: false, message: "Update Failed" });
+      }
     });
 
-    // ৪.samary  
-    const summary = result.reduce((acc, curr) => {
-      if (curr.breakfast) acc.breakfast += 1;
-      if (curr.lunch) acc.lunch += 1;
-      if (curr.dinner) acc.dinner += 1;
-      acc.guestMeal += (curr.guestBreakfast + curr.guestLunch + curr.guestDinner);
-      return acc;
-    }, { breakfast: 0, lunch: 0, dinner: 0, guestMeal: 0 });
+    app.get("/api/manager/meals", async (req, res) => {
+      try {
+        const { userId, date } = req.query;
 
-    res.send({ success: true, summary, members: result });
-  } catch (error) {
-    res.status(500).send({ success: false, message: "Server Error" });
-  }
-});
+        // ১. ইউজারটি ম্যানেজার কি না চেক করো
+        const manager = await allmembers.findOne({
+          userId: userId,
+          role: "manager",
+        });
+        if (!manager) {
+          return res
+            .status(403)
+            .send({ success: false, message: "Unauthorized" });
+        }
 
+        const members = await allmembers
+          .find({ messId: manager.messId })
+          .toArray();
 
+        const mealDate = new Date(date);
+        mealDate.setUTCHours(0, 0, 0, 0);
+        const mealRecords = await Meals.find({ date: mealDate }).toArray();
+
+        // ৩. if thare have no meal record for a member, we will assume they didn't take any meal
+        const result = members.map((member) => {
+          const record =
+            mealRecords.find((m) => m.userId === member.userId) || {};
+          return {
+            userId: member.userId,
+            name: member.name,
+            breakfast: record.breakfast !== false,
+            lunch: record.lunch !== false,
+            dinner: record.dinner !== false,
+            guestBreakfast: record.guestBreakfast || 0,
+            guestLunch: record.guestLunch || 0,
+            guestDinner: record.guestDinner || 0,
+            createdAt: member.createdAt,
+          };
+        });
+
+        // ৪.samary
+        const summary = result.reduce(
+          (acc, curr) => {
+            if (curr.breakfast) acc.breakfast += 1;
+            if (curr.lunch) acc.lunch += 1;
+            if (curr.dinner) acc.dinner += 1;
+            acc.guestMeal +=
+              curr.guestBreakfast + curr.guestLunch + curr.guestDinner;
+            return acc;
+          },
+          { breakfast: 0, lunch: 0, dinner: 0, guestMeal: 0 },
+        );
+
+        res.send({ success: true, summary, members: result });
+      } catch (error) {
+        res.status(500).send({ success: false, message: "Server Error" });
+      }
+    });
+
+    //  DEPOSIT / PAYMENT MANAGEMENT
+
+    // ১. Manager নতুন Deposit Add করবে
+    app.post("/api/deposits", async (req, res) => {
+      try {
+        const { managerId, userId, amount, paymentMethod, note, date } =
+          req.body;
+
+        // Validation
+        if (!managerId || !userId || !amount || !paymentMethod || !date) {
+          return res.status(400).send({
+            success: false,
+            message: "managerId, userId, amount, paymentMethod, date আবশ্যক",
+          });
+        }
+
+        if (parseFloat(amount) <= 0) {
+          return res.status(400).send({
+            success: false,
+            message: "Amount must be greater than 0",
+          });
+        }
+
+        const validMethods = ["Cash", "bKash", "Nagad", "Bank"];
+        if (!validMethods.includes(paymentMethod)) {
+          return res.status(400).send({
+            success: false,
+            message:
+              "paymentMethod must be one of Cash, bKash, Nagad, or Bank",
+          });
+        }
+
+        // Manager verify করা
+        const manager = await allmembers.findOne({
+          userId: managerId,
+          role: "manager",
+        });
+        if (!manager) {
+          return res
+            .status(403)
+            .send({
+              success: false,
+              message: "Unauthorized: Only managers can add deposits",
+            });
+        }
+
+        // টাকা যে মেম্বার দিয়েছে সে এই ম্যানেজারের মেসেরই কি না চেক করা
+        const targetMember = await allmembers.findOne({
+          userId,
+          messId: manager.messId,
+        });
+        if (!targetMember) {
+          return res
+            .status(403)
+            .send({
+              success: false,
+              message: "This member is not in your mess",
+            });
+        }
+
+        const newDeposit = {
+          messId: manager.messId,
+          userId,
+          amount: parseFloat(amount),
+          paymentMethod,
+          note: note || "",
+          receivedBy: managerId,
+          date: new Date(date),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+
+        const result = await Deposits.insertOne(newDeposit);
+
+        res.send({
+          success: true,
+          message: "Deposit added successfully",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Add Deposit Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to add deposit" });
+      }
+    });
+
+    // ২. User নিজের Deposit History + Total দেখবে
+    app.get("/api/deposits/user/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+
+        const history = await Deposits.find({ userId })
+          .sort({ date: -1 })
+          .toArray();
+
+        const total = history.reduce((sum, d) => sum + d.amount, 0);
+
+        res.send({
+          success: true,
+          total,
+          count: history.length,
+          data: history,
+        });
+      } catch (error) {
+        console.error("Get User Deposits Error:", error);
+        res.status(500).send({ success: false, message: "Server Error" });
+      }
+    });
+
+    // ৩. Manager সব মেম্বারের Deposit দেখবে (Search + Month Filter সহ)
+    // Usage: /api/manager/deposits?managerId=xxx&month=2026-07&search=Rahim
+    app.get("/api/manager/deposits", async (req, res) => {
+      try {
+        const { managerId, month, search } = req.query;
+
+        if (!managerId) {
+          return res
+            .status(400)
+            .send({ success: false, message: "managerId is required" });
+        }
+
+        const manager = await allmembers.findOne({
+          userId: managerId,
+          role: "manager",
+        });
+        if (!manager) {
+          return res
+            .status(403)
+            .send({ success: false, message: "Unauthorized" });
+        }
+
+        // Member filter (name দিয়ে search)
+        const memberMatch = { messId: manager.messId };
+        if (search) {
+          memberMatch.name = { $regex: search, $options: "i" };
+        }
+
+        // Month filter (format: 2026-07)
+        let dateFilter = null;
+        if (month) {
+          const [year, monthNum] = month.split("-").map(Number);
+          if (!year || !monthNum) {
+            return res
+              .status(400)
+              .send({
+                success: false,
+                message: "month format must be YYYY-MM",
+              });
+          }
+          const startDate = new Date(year, monthNum - 1, 1);
+          const endDate = new Date(year, monthNum, 1);
+          dateFilter = { $gte: startDate, $lt: endDate };
+        }
+
+        const summary = await allmembers
+          .aggregate([
+            { $match: memberMatch },
+            {
+              $lookup: {
+                from: "deposits",
+                let: { uid: "$userId" },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: { $eq: ["$userId", "$$uid"] },
+                      ...(dateFilter ? { date: dateFilter } : {}),
+                    },
+                  },
+                  { $sort: { date: -1 } },
+                ],
+                as: "history",
+              },
+            },
+            {
+              $project: {
+                name: 1,
+                image: 1,
+                userId: 1,
+                history: 1,
+                total: { $sum: "$history.amount" },
+              },
+            },
+          ])
+          .toArray();
+
+        const grandTotal = summary.reduce((sum, m) => sum + m.total, 0);
+
+        res.send({ success: true, grandTotal, data: summary });
+      } catch (error) {
+        console.error("Get Manager Deposits Error:", error);
+        res.status(500).send({ success: false, message: "Server Error" });
+      }
+    });
+
+    // ৪. Manager Deposit Edit করবে
+    app.patch("/api/deposits/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { managerId, amount, paymentMethod, note, date } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Invalid deposit ID" });
+        }
+
+        const manager = await allmembers.findOne({
+          userId: managerId,
+          role: "manager",
+        });
+        if (!manager) {
+          return res
+            .status(403)
+            .send({ success: false, message: "Unauthorized" });
+        }
+
+        const updateData = { updatedAt: new Date() };
+        if (amount !== undefined) {
+          if (parseFloat(amount) <= 0) {
+            return res
+              .status(400)
+              .send({
+                success: false,
+                message: "Amount must be greater than 0",
+              });
+          }
+          updateData.amount = parseFloat(amount);
+        }
+        if (paymentMethod !== undefined)
+          updateData.paymentMethod = paymentMethod;
+        if (note !== undefined) updateData.note = note;
+        if (date !== undefined) updateData.date = new Date(date);
+
+        const result = await Deposits.updateOne(
+          { _id: new ObjectId(id), messId: manager.messId }, // নিজের মেসের বাইরে edit করতে পারবে না
+          { $set: updateData },
+        );
+
+        if (result.matchedCount === 0) {
+          return res
+            .status(404)
+            .send({ success: false, message: "Deposit not found" });
+        }
+
+        res.send({ success: true, message: "Deposit updated successfully" });
+      } catch (error) {
+        console.error("Update Deposit Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to update deposit" });
+      }
+    });
+
+    // ৫. Manager Deposit Delete করবে
+    app.delete("/api/deposits/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { managerId } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Invalid deposit ID" });
+        }
+
+        const manager = await allmembers.findOne({
+          userId: managerId,
+          role: "manager",
+        });
+        if (!manager) {
+          return res
+            .status(403)
+            .send({ success: false, message: "Unauthorized" });
+        }
+
+        const result = await Deposits.deleteOne({
+          _id: new ObjectId(id),
+          messId: manager.messId,
+        });
+
+        if (result.deletedCount === 0) {
+          return res
+            .status(404)
+            .send({ success: false, message: "Deposit not found" });
+        }
+
+        res.send({ success: true, message: "Deposit deleted successfully" });
+      } catch (error) {
+        console.error("Delete Deposit Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to delete deposit" });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
