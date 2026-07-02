@@ -514,11 +514,10 @@ async function run() {
       try {
         const { userId, month, year } = req.query;
 
-        // মাস এবং বছর অনুযায়ী ডেট রেঞ্জ তৈরি
         const startDate = new Date(year, month - 1, 1);
         const endDate = new Date(year, month, 0);
 
-        // .toArray() যোগ করা হয়েছে
+        
         const meals = await Meals.find({
           userId,
           date: { $gte: startDate, $lte: endDate },
@@ -593,20 +592,18 @@ app.get("/api/manager/meals", async (req, res) => {
       return res.status(403).send({ success: false, message: "Unauthorized" });
     }
 
-    // ২. মেসের সবার ডাটা আনো (ম্যানেজার + সব বর্ডার)
-    // কারণ ম্যানেজার নিজেও ওই messId এর একজন সদস্য
     const members = await allmembers.find({ messId: manager.messId }).toArray();
     
     const mealDate = new Date(date);
     mealDate.setUTCHours(0, 0, 0, 0);
     const mealRecords = await Meals.find({ date: mealDate }).toArray();
 
-    // ৩. মার্জিং (যদি কারও রেকর্ড না থাকে, ডিফল্ট true)
+    // ৩. if thare have no meal record for a member, we will assume they didn't take any meal
     const result = members.map(member => {
       const record = mealRecords.find(m => m.userId === member.userId) || {};
       return {
         userId: member.userId,
-        name: member.name, // ম্যানেজারের নামও এখান থেকে আসবে
+        name: member.name, 
         breakfast: record.breakfast !== false, 
         lunch: record.lunch !== false,
         dinner: record.dinner !== false,
@@ -617,7 +614,7 @@ app.get("/api/manager/meals", async (req, res) => {
       };
     });
 
-    // ৪. সামারি (সবাইকে মিলিয়ে)
+    // ৪.samary  
     const summary = result.reduce((acc, curr) => {
       if (curr.breakfast) acc.breakfast += 1;
       if (curr.lunch) acc.lunch += 1;
