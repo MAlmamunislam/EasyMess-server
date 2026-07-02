@@ -38,6 +38,7 @@ async function run() {
     const joinRequestsCollection = db.collection("joinRequests");
     const Meals = db.collection("mealscollection");
     const Deposits = db.collection("deposits");
+    const Bazaars = db.collection("bazaars");
 
     // Generate random invite code
     function generateInviteCode() {
@@ -229,6 +230,7 @@ async function run() {
       }
     });
 
+    // there have error in this code
     // GET: Fetch user details by userId
     app.get("/api/user-details/:userId", async (req, res) => {
       try {
@@ -955,6 +957,409 @@ async function run() {
           .send({ success: false, message: "Failed to delete deposit" });
       }
     });
+
+
+
+
+
+
+
+    // bazar management 
+
+
+// 🛒 BAZAAR MANAGEMENT
+
+
+// Helper: only Manager can access, and only for their own mess
+async function getVerifiedManager(managerId) {
+  return await allmembers.findOne({ userId: managerId, role: "manager" });
+}
+
+// 1. Create a new Bazaar entry
+app.post("/api/bazaars", async (req, res) => {
+  try {
+    const { managerId, date, note, items } = req.body;
+
+    if (!managerId || !date || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).send({
+        success: false,
+        message: "managerId, date and at least one item are required",
+      });
+    }
+
+    const manager = await getVerifiedManager(managerId);
+    if (!manager) {
+      return res.status(403).send({ success: false, message: "Unauthorized: Only managers can add bazaar" });
+    }
+
+    // Clean items: drop empty rows, force amount to a number
+    const cleanItems = items
+      .filter((item) => item.title && item.title.trim() !== "")
+      .map((item) => ({
+        title: item.title.trim(),
+        amount: parseFloat(item.amount) || 0,
+      }));
+
+    if (cleanItems.length === 0) {
+      return res.status(400).send({ success: false, message: "Add at least one valid item" });
+    }
+
+    const hasInvalidAmount = cleanItems.some((item) => item.amount <= 0);
+    if (hasInvalidAmount) {
+      return res.status(400).send({ success: false, message: "Item amount must be greater than 0" });
+    }
+
+    const totalAmount = cleanItems.reduce((sum, item) => sum + item.amount, 0);
+    const bazaarDate = new Date(date);
+
+    const newBazaar = {
+      messId: manager.messId,
+      date: bazaarDate,
+      items: cleanItems,
+      totalAmount,
+      note: note || "",
+      createdBy: managerId,
+      month: bazaarDate.getMonth() + 1,
+      year: bazaarDate.getFullYear(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await Bazaars.insertOne(newBazaar);
+
+    res.send({
+      success: true,
+      message: "Bazaar added successfully",
+      insertedId: result.insertedId,
+    });
+  } catch (error) {
+    console.error("Add Bazaar Error:", error);
+    res.status(500).send({ success: false, message: "Failed to add bazaar" });
+  }
+});
+
+// 2. Get Bazaar history for a mess (Month/Year filter supported)
+// Usage: /api/bazaars?managerId=xxx&month=7&year=2026
+app.get("/api/bazaars", async (req, res) => {
+  try {
+    const { managerId, month, year } = req.query;
+
+    if (!managerId) {
+      return res.status(400).send({ success: false, message: "managerId is required" });
+    }
+
+    const manager = await getVerifiedManager(managerId);
+    if (!manager) {
+      return res.status(403).send({ success: false, message: "Unauthorized" });
+    }
+
+    const filter = { messId: manager.messId };
+    if (month) filter.month = parseInt(month);
+    if (year) filter.year = parseInt(year);
+
+    const bazaars = await Bazaars.find(filter).sort({ date: -1 }).toArray();
+
+    const grandTotal = bazaars.reduce((sum, b) => sum + b.totalAmount, 0);
+
+    res.send({ success: true, grandTotal, data: bazaars });
+  } catch (error) {
+    console.error("Get Bazaars Error:", error);
+    res.status(500).send({ success: false, message: "Server Error" });
+  }
+});
+
+// 3. Update a Bazaar entry
+app.patch("/api/bazaars/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { managerId, date, note, items } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid bazaar ID" });
+    }
+
+    const manager = await getVerifiedManager(managerId);
+    if (!manager) {
+      return res.status(403).send({ success: false, message: "Unauthorized" });
+    }
+
+    const updateData = { updatedAt: new Date() };
+
+    if (Array.isArray(items)) {
+      const cleanItems = items
+        .filter((item) => item.title && item.title.trim() !== "")
+        .map((item) => ({
+          title: item.title.trim(),
+          amount: parseFloat(item.amount) || 0,
+        }));
+
+      if (cleanItems.length === 0) {
+        return res.status(400).send({ success: false, message: "Add at least one valid item" });
+      }
+      const hasInvalidAmount = cleanItems.some((item) => item.amount <= 0);
+      if (hasInvalidAmount) {
+        return res.status(400).send({ success: false, message: "Item amount must be greater than 0" });
+      }
+
+      updateData.items = cleanItems;
+      updateData.totalAmount = cleanItems.reduce((sum, item) => sum + item.amount, 0);
+    }
+
+    if (date !== undefined) {
+      const bazaarDate = new Date(date);
+      updateData.date = bazaarDate;
+      updateData.month = bazaarDate.getMonth() + 1;
+      updateData.year = bazaarDate.getFullYear();
+    }
+
+    if (note !== undefined) updateData.note = note;
+
+    const result = await Bazaars.updateOne(
+      { _id: new ObjectId(id), messId: manager.messId },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ success: false, message: "Bazaar not found" });
+    }
+
+    res.send({ success: true, message: "Bazaar updated successfully" });
+  } catch (error) {
+    console.error("Update Bazaar Error:", error);
+    res.status(500).send({ success: false, message: "Failed to update bazaar" });
+  }
+});
+
+// 4. Delete a Bazaar entry
+app.delete("/api/bazaars/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { managerId } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid bazaar ID" });
+    }
+
+    const manager = await getVerifiedManager(managerId);
+    if (!manager) {
+      return res.status(403).send({ success: false, message: "Unauthorized" });
+    }
+
+    const result = await Bazaars.deleteOne({
+      _id: new ObjectId(id),
+      messId: manager.messId,
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ success: false, message: "Bazaar not found" });
+    }
+
+    res.send({ success: true, message: "Bazaar deleted successfully" });
+  } catch (error) {
+    console.error("Delete Bazaar Error:", error);
+    res.status(500).send({ success: false, message: "Failed to delete bazaar" });
+  }
+});
+
+
+
+
+// 5. Member: Get Bazaar history of their own mess (view only)
+// Usage: /api/bazaars/user/:userId?month=7&year=2026
+app.get("/api/bazaars/user/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { month, year } = req.query;
+
+    // ইউজার কোনো মেসের member কি না চেক করা
+    const member = await allmembers.findOne({ userId });
+    if (!member) {
+      return res
+        .status(403)
+        .send({ success: false, message: "Unauthorized: You are not a member of any mess!" });
+    }
+
+    const filter = { messId: member.messId };
+    if (month) filter.month = parseInt(month);
+    if (year) filter.year = parseInt(year);
+
+    const bazaars = await Bazaars.find(filter).sort({ date: -1 }).toArray();
+    const grandTotal = bazaars.reduce((sum, b) => sum + b.totalAmount, 0);
+
+    res.send({ success: true, grandTotal, data: bazaars });
+  } catch (error) {
+    console.error("Get User Bazaars Error:", error);
+    res.status(500).send({ success: false, message: "Server Error" });
+  }
+});
+
+
+
+
+
+// sumary of all expenses for a mess
+
+// ============================================================
+// 📊 MONTHLY OVERVIEW & REPORT MODULE
+// ============================================================
+// এই কোডটুকু তোমার existing index.js এর run() ফাংশনের ভিতরে,
+// অন্য app.get/app.post গুলোর পাশে বসিয়ে দাও।
+// এটা তোমার allmesses, allmembers, Meals, Deposits, Bazaars
+// collection গুলো ব্যবহার করে (উপরে run() এর ভিতরে যেভাবে define করা আছে)।
+// ============================================================
+
+// GET: Monthly Overview (User + Manager উভয়ই access করতে পারবে)
+// Usage: /api/overview?userId=xxx&month=7&year=2026
+app.get("/api/overview", async (req, res) => {
+  try {
+    const { userId, month, year } = req.query;
+
+    if (!userId || !month || !year) {
+      return res.status(400).send({
+        success: false,
+        message: "userId, month, year আবশ্যক",
+      });
+    }
+
+    // ১. Requester কোন মেসের member তা বের করা (User বা Manager দুজনই এখানে আসতে পারবে)
+    const requester = await allmembers.findOne({ userId });
+    if (!requester) {
+      return res.status(403).send({
+        success: false,
+        message: "Unauthorized: You are not a member of any mess!",
+      });
+    }
+
+    const messId = requester.messId;
+
+    // ২. Mess খুঁজে বের করা (মিল ওয়েট, নাম ইত্যাদির জন্য)
+    const mess = await allmesses.findOne({ _id: messId });
+    if (!mess) {
+      return res.status(404).send({ success: false, message: "Mess not found" });
+    }
+
+    const weights = mess.mealSettings || {
+      breakfastWeight: 0.5,
+      lunchWeight: 1,
+      dinnerWeight: 1,
+    };
+
+    // ৩. এই মেসের সব member নিয়ে আসা
+    const members = await allmembers.find({ messId }).toArray();
+    const memberUserIds = members.map((m) => m.userId);
+
+    // ৪. Selected Month এর Date Range বানানো
+    const monthNum = parseInt(month);
+    const yearNum = parseInt(year);
+    const startDate = new Date(yearNum, monthNum - 1, 1);
+    const endDate = new Date(yearNum, monthNum, 1); // পরের মাসের ১ তারিখ (exclusive)
+
+    // ৫. এই মাসের সব Meal record আনা (এই মেসের সব member এর জন্য)
+    const meals = await Meals.find({
+      userId: { $in: memberUserIds },
+      date: { $gte: startDate, $lt: endDate },
+    }).toArray();
+
+    // ৬. এই মাসের সব Deposit আনা
+    const deposits = await Deposits.find({
+      messId,
+      date: { $gte: startDate, $lt: endDate },
+    }).toArray();
+
+    // ৭. এই মাসের সব Bazaar আনা (bazaar এ আগে থেকেই month/year field আছে)
+    const bazaars = await Bazaars.find({
+      messId,
+      month: monthNum,
+      year: yearNum,
+    }).toArray();
+
+    // ৮. Total Bazaar বের করা
+    const totalBazaar = bazaars.reduce((sum, b) => sum + (b.totalAmount || 0), 0);
+
+    // ৯. প্রতিটা member এর জন্য weighted meal count বের করা (নিজের meal + guest meal)
+    function calcWeightedMeal(record) {
+      if (!record) return 0;
+      const own =
+        (record.breakfast !== false ? weights.breakfastWeight : 0) +
+        (record.lunch !== false ? weights.lunchWeight : 0) +
+        (record.dinner !== false ? weights.dinnerWeight : 0);
+      const guest =
+        (record.guestBreakfast || 0) * weights.breakfastWeight +
+        (record.guestLunch || 0) * weights.lunchWeight +
+        (record.guestDinner || 0) * weights.dinnerWeight;
+      return own + guest;
+    }
+
+    // member wise data তৈরি করা
+    const memberData = members.map((member) => {
+      const memberMeals = meals.filter((m) => m.userId === member.userId);
+      const totalMeal = memberMeals.reduce(
+        (sum, record) => sum + calcWeightedMeal(record),
+        0
+      );
+
+      const memberDeposits = deposits.filter((d) => d.userId === member.userId);
+      const deposit = memberDeposits.reduce((sum, d) => sum + (d.amount || 0), 0);
+
+      return {
+        userId: member.userId,
+        userName: member.name,
+        totalMeal: Number(totalMeal.toFixed(2)),
+        deposit,
+      };
+    });
+
+    // ১০. Total Meal (পুরো মেসের) এবং Meal Rate বের করা
+    const totalMeal = memberData.reduce((sum, m) => sum + m.totalMeal, 0);
+    const mealRate = totalMeal > 0 ? totalBazaar / totalMeal : 0;
+
+    // ১১. Total Deposit বের করা
+    const totalDeposit = memberData.reduce((sum, m) => sum + m.deposit, 0);
+
+    // ১২. প্রতিটা member এর Bill, Balance, Status বের করা
+    const finalMembers = memberData.map((m) => {
+      const bill = Number((m.totalMeal * mealRate).toFixed(2));
+      const balance = Number((m.deposit - bill).toFixed(2));
+
+      return {
+        userId: m.userId,
+        userName: m.userName,
+        totalMeal: m.totalMeal,
+        deposit: m.deposit,
+        bill,
+        balance,
+        status: balance >= 0 ? "advance" : "due",
+      };
+    });
+
+    // ১৩. Response পাঠানো (Doc এর Response Format অনুযায়ী)
+    res.send({
+      success: true,
+      messName: mess.messName,
+      month: monthNum,
+      year: yearNum,
+      requesterRole: requester.role, // frontend এটা দিয়ে বুঝবে manager না user
+      summary: {
+        totalDeposit,
+        totalBazaar,
+        totalMeal: Number(totalMeal.toFixed(2)),
+        mealRate: Number(mealRate.toFixed(2)),
+      },
+      members: finalMembers,
+    });
+  } catch (error) {
+    console.error("Overview Error:", error);
+    res.status(500).send({ success: false, message: "Failed to load overview" });
+  }
+});
+
+
+
+
+
+
+
+
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
